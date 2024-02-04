@@ -11,27 +11,28 @@ function p_losses(
     loss,
     x_start::AbstractArray{T,N},
     timesteps::AbstractVector{Int},
-    labels::AbstractVector{Int},
+    labels,
     noise::AbstractArray
     ) where {T,N}
-    if (size(x_start, N) != length(labels))
-        throw(DimensionMismatch("batch size != label length, $N != $(length(labels))"))
+    if (size(x_start, N) != size(labels)[end])
+        throw(DimensionMismatch("batch size != label length, $N != $(size(labels)[end])"))
     end
     x = q_sample(diffusion, x_start, timesteps, noise)
     model_out = diffusion.denoise_fn(x, timesteps, labels)
-    loss(model_out, noise)
+
+    loss(model_out, noise) + 10f0 .* loss(model_out .* labels[:,:,1:1,:], noise .* labels[:,:,1:1,:])
 end
 
 function p_losses(
     diffusion::GaussianDiffusion,
     loss,
     x_start::AbstractArray,
-    labels::AbstractVector{Int},
+    labels,
     ; to_device=cpu
     )
     batch_size = size(x_start)[end]
-    @assert(batch_size == length(labels),
-        "batch size != label length, $batch_size != $(length(labels))"
+    @assert(batch_size == size(labels)[end],
+        "batch size != label length, $batch_size != $(size(labels)[end])"
     )
     timesteps = rand(1:diffusion.num_timesteps, batch_size) |> to_device
     noise = randn(eltype(eltype(diffusion)), size(x_start)) |> to_device
@@ -50,7 +51,7 @@ See `p_sample_loop_all` for a version which returns values for all timesteps.
 Reference: [Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2207.12598) by Jonathan Ho, Tim Salimans (2022)  
 """
 function p_sample_loop(
-    diffusion::GaussianDiffusion, shape::NTuple, labels::AbstractVector{Int}
+    diffusion::GaussianDiffusion, shape::NTuple, labels
     ; clip_denoised::Bool=true, to_device=cpu, guidance_scale::AbstractFloat=1.0f0
     )
     T = eltype(eltype(diffusion))
@@ -66,12 +67,12 @@ function p_sample_loop(
     x
 end
 
-function p_sample_loop(diffusion::GaussianDiffusion, batch_size::Int, label::Int; options...)
-    labels = fill(label, batch_size)
+function p_sample_loop(diffusion::GaussianDiffusion, batch_size::Int, labels; options...)
+    # labels = fill(label, batch_size)
     p_sample_loop(diffusion, (diffusion.data_shape..., batch_size), labels; options...)
 end
 
-function p_sample_loop(diffusion::GaussianDiffusion, labels::AbstractVector{Int}; options...)
+function p_sample_loop(diffusion::GaussianDiffusion, labels; options...)
     batch_size = length(labels)
     p_sample_loop(diffusion, (diffusion.data_shape..., batch_size), labels; options...)
 end
@@ -88,7 +89,7 @@ See `p_sample_loop` for a version which returns only the final sample.
 Reference: [Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2207.12598) by Jonathan Ho, Tim Salimans (2022)  
 """
 function p_sample_loop_all(
-    diffusion::GaussianDiffusion, shape::NTuple, labels::AbstractVector{Int}
+    diffusion::GaussianDiffusion, shape::NTuple, labels
     ; clip_denoised::Bool=true, to_device=cpu, guidance_scale::AbstractFloat=1.0f0
 )
     T = eltype(eltype(diffusion))
@@ -109,13 +110,13 @@ function p_sample_loop_all(
     x_all, x_start_all
 end
 
-function p_sample_loop_all(diffusion::GaussianDiffusion, batch_size::Int, label::Int; options...)
+function p_sample_loop_all(diffusion::GaussianDiffusion, batch_size::Int, label; options...)
     labels = fill(label, batch_size)
     shape = (diffusion.data_shape..., batch_size)
     p_sample_loop_all(diffusion, shape, labels; options...)
 end
 
-function p_sample_loop_all(diffusion::GaussianDiffusion, labels::AbstractVector{Int}; options...)
+function p_sample_loop_all(diffusion::GaussianDiffusion, labels; options...)
     batch_size = length(labels)
     shape = (diffusion.data_shape..., batch_size)
     p_sample_loop_all(diffusion, shape, labels; options...)
@@ -133,7 +134,7 @@ function p_sample(
     diffusion::GaussianDiffusion,
     x::AbstractArray,
     timesteps::AbstractVector{Int},
-    labels::AbstractVector{Int},
+    labels,
     noise::AbstractArray
     ;
     clip_denoised::Bool=true,
@@ -162,7 +163,7 @@ function denoise(
     diffusion::GaussianDiffusion,
     x::AbstractArray,
     timesteps::AbstractVector{Int},
-    labels::AbstractVector{Int}
+    labels
     )
     noise = diffusion.denoise_fn(x, timesteps, labels)
     x_start = predict_start_from_noise(diffusion, x, timesteps, noise)
@@ -173,7 +174,7 @@ function classifier_free_guidance(
     diffusion::GaussianDiffusion,
     x::AbstractArray,
     timesteps::AbstractVector{Int},
-    labels::AbstractVector{Int}
+    labels
     ; guidance_scale=1.0f0
     )
     T = eltype(eltype(diffusion))
@@ -181,7 +182,7 @@ function classifier_free_guidance(
     batch_size = size(x)[end]
     x_double = cat(x, x, dims=ndims(x))
     timesteps_double = vcat(timesteps, timesteps)
-    labels_both = vcat(labels, fill(1, batch_size))
+    labels_both = cat(labels, zeros(size(labels)), dims=ndims(labels))
 
     noise_both = diffusion.denoise_fn(x_double, timesteps_double, labels_both)
 

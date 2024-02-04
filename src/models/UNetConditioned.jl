@@ -67,7 +67,7 @@ function UNetConditioned(
     model_channels::Int,
     num_timesteps::Int,
     ;
-    num_classes::Int=1,
+    class_embedding,
     channel_multipliers::NTuple{N,Int}=(1, 2, 4),
     block_layer=ResBlock,
     num_blocks_per_level::Int=1,
@@ -88,7 +88,7 @@ function UNetConditioned(
         Dense(time_dim, time_dim, gelu),
         Dense(time_dim, time_dim)
     )
-    class_embedding = Flux.Embedding((num_classes + 1) => time_dim)
+    
     embed_dim = (combine_embeddings == vcat) ? 2 * time_dim : time_dim
 
     in_ch, out_ch = in_out[1]
@@ -121,7 +121,7 @@ function UNetConditioned(
     UNetConditioned(time_embed, class_embedding, combine_embeddings, chain, length(channel_multipliers) + 1)
 end
 
-function (u::UNetConditioned)(x::AbstractArray, timesteps::AbstractVector{Int}, labels::AbstractVector{Int})
+function (u::UNetConditioned)(x::AbstractArray, timesteps::AbstractVector{Int}, labels)
     downsize_factor = 2^(u.num_levels - 2)
     if (size(x, 1) % downsize_factor != 0) || (size(x, 2) % downsize_factor != 0)
         throw(DimensionMismatch(
@@ -137,7 +137,7 @@ end
 
 function (u::UNetConditioned)(x::AbstractArray, timesteps::AbstractVector{Int})
     batch_size = length(timesteps)
-    labels = fill(1, batch_size)
+    labels = zeros(size(x)[1:end-1]..., batch_size)
     u(x, timesteps, labels)
 end
 

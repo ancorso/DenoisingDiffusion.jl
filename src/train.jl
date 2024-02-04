@@ -61,6 +61,17 @@ function randomly_set_unconditioned(
     labels
 end
 
+function randomly_set_unconditioned(
+    labels::AbstractArray{Float32}; prob_uncond::Float64=0.20
+    )
+    # with probability prob_uncond we train without class conditioning
+    labels = copy(labels)
+    batch_size = size(labels)[end]
+    is_not_class_cond = rand(batch_size) .<= prob_uncond
+    labels[:,:,:,is_not_class_cond] .= 0
+    labels
+end
+
 function update_history!(model, history, loss, val_data; prob_uncond::Float64=0.0)
     val_loss = batched_loss(loss, model, val_data; prob_uncond=prob_uncond)
     push!(history["val_loss"], val_loss)
@@ -101,7 +112,7 @@ function split_validation(rng::AbstractRNG, data::AbstractArray; frac=0.1)
     train_data, val_data
 end
 
-function split_validation(rng::AbstractRNG, data::AbstractArray, labels::AbstractVecOrMat; frac=0.1)
+function split_validation(rng::AbstractRNG, data::AbstractArray, labels; frac=0.1)
     nsamples = size(data)[end]
     idxs = randperm(rng, nsamples)
     ntrain = nsamples - floor(Int, frac * nsamples)
@@ -109,11 +120,23 @@ function split_validation(rng::AbstractRNG, data::AbstractArray, labels::Abstrac
     ## train data
     idxs_train = idxs[1:ntrain]
     train_data = data[inds_start..., idxs_train]
-    train_labels = ndims(labels) == 2 ? labels[:, idxs_train] : labels[idxs_train]
+    if ndims(labels) == 2
+        train_labels = labels[:, idxs_train]
+    elseif ndims(labels) == 4
+        train_labels = labels[:, :, :, idxs_train]
+    else
+        train_labels = labels[idxs_train]
+    end
     ## validation data
     idxs_val = idxs[(ntrain + 1):end]
     val_data = data[inds_start..., idxs_val]
-    val_labels = ndims(labels) == 2 ? labels[:, idxs_val] : labels[idxs_val]
+    if ndims(labels) == 2
+        val_labels = labels[:, idxs_val]
+    elseif ndims(labels) == 4
+        val_labels = labels[:, :, :, idxs_val]
+    else
+        val_labels = labels[idxs_val]
+    end
     (train_data, train_labels), (val_data, val_labels)
 end
 

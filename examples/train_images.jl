@@ -1,3 +1,4 @@
+ENV["CUDA_VISIBLE_DEVICES"] = 1
 using MLDatasets
 using Flux
 using CUDA, cuDNN
@@ -7,6 +8,7 @@ using Printf
 using Random
 using ProgressMeter
 using Plots, Images
+using HDF5
 
 using DenoisingDiffusion
 using DenoisingDiffusion: train!, split_validation
@@ -16,8 +18,8 @@ include("load_images.jl")
 ### settings
 num_timesteps = 100
 seed = 2714
-dataset = :MNIST  # :MNIST or :Pokemon
-data_directory = "C:\\Users\\sinai\\Documents\\Projects\\datasets\\MNIST"
+dataset = :Layers  # :MNIST or :Pokemon or Minex or Layers
+data_directory = "../DGMExamples/data/"
 output_directory = joinpath("outputs", "$(dataset)_" * Dates.format(now(), "yyyymmdd_HHMM"))
 model_channels = 16
 learning_rate = 0.001
@@ -25,6 +27,8 @@ batch_size = 32
 num_epochs = 10
 loss_type = Flux.mse;
 to_device = gpu # cpu or gpu
+
+
 
 ### data
 if dataset == :MNIST
@@ -35,6 +39,14 @@ elseif dataset == :Pokemon
     println("loading images")
     data = load_images(data_directory)
     norm_data = normalize_neg_one_to_one(data)
+    train_x, val_x = split_validation(MersenneTwister(seed), norm_data)
+elseif dataset == :Minex
+    trainset = h5read(joinpath(data_directory, "ore_maps_32.hdf5"), "X")[2:29, 2:29, 1, :]
+    norm_data = normalize_neg_one_to_one(reshape(trainset, 28,28,1,:))
+    train_x, val_x = split_validation(MersenneTwister(seed), norm_data)
+elseif dataset == :Layers
+    trainset = h5read(joinpath("../gravity_data/", "training_data.hdf5"), "x")[1:28, 1:28, :]
+    norm_data = normalize_neg_one_to_one(reshape(trainset, 28,28,1,:))
     train_x, val_x = split_validation(MersenneTwister(seed), norm_data)
 else
     throw("$dataset not supported")
@@ -129,17 +141,17 @@ open(history_path, "w") do f
 end
 println("saved history to $history_path")
 
-let diffusion = cpu(diffusion), opt_state = cpu(opt_state)
-    # save opt_state in case want to resume training
-    BSON.bson(
-        output_path, 
-        Dict(
-            :diffusion => diffusion, 
-            :opt_state => opt_state
-        )
-    )
-end
-println("saved model to $output_path")
+# let diffusion = cpu(diffusion), opt_state = cpu(opt_state)
+#     # save opt_state in case want to resume training
+#     BSON.bson(
+#         output_path, 
+#         Dict(
+#             :diffusion => diffusion, 
+#             :opt_state => opt_state
+#         )
+#     )
+# end
+# println("saved model to $output_path")
 
 ### plot results
 
@@ -156,17 +168,18 @@ display(canvas_train)
 
 X0 = p_sample_loop(diffusion, 12; to_device=to_device)
 X0 = cpu(X0)
+# if dataset == :MNIST || :Minex
+#     imgs = convert2image(trainset, X0[:, :, 1, :])
+# elseif dataset == :Pokemon
+#     for i in 1:12
+#         X0[:, :, :, i] = normalize_zero_to_one(X0[:, :, :, i])
+#     end
+#     imgs = img_WHC_to_rgb(X0)
+# end
+heatmap(train_x[:,:,1,1])
+plot([heatmap(train_x[:, :, 1, i], colorbar=false, axis=false, margin=0Plots.mm) for i in 1:12]...)
 
-if dataset == :MNIST
-    imgs = convert2image(trainset, X0[:, :, 1, :])
-elseif dataset == :Pokemon
-    for i in 1:12
-        X0[:, :, :, i] = normalize_zero_to_one(X0[:, :, :, i])
-    end
-    imgs = img_WHC_to_rgb(X0)
-end
-
-canvas_samples = plot([plot(imgs[:, :, i]) for i in 1:12]...)
+canvas_samples = plot([heatmap(X0[:, :, 1, i], colorbar=false, axis=false, margin=0Plots.mm) for i in 1:12]...)
 savefig(canvas_samples, joinpath(output_directory, "samples.png"))
 display(canvas_samples)
 
