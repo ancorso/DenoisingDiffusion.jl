@@ -130,13 +130,13 @@ function (u::UNetFixed)(x::AbstractArray, timesteps::AbstractVector{Int})
         h = _maybe_forward(layer, h, emb)
     end
     ## ups
-    h = cat_on_channel_dim(h, h6)
+    h = cat_on_channel_dim()(h, h6)
     h = _maybe_forward(u.ups[1], h, emb) # block
     h = _maybe_forward(u.ups[2], h, emb) # upsample
-    h = cat_on_channel_dim(h, h4)
+    h = cat_on_channel_dim()(h, h4)
     h = _maybe_forward(u.ups[3], h, emb) # block
     h = _maybe_forward(u.ups[4], h, emb) # upsample
-    h = cat_on_channel_dim(h, h2)
+    h = cat_on_channel_dim()(h, h2)
     h = _maybe_forward(u.ups[5], h, emb) # block
     h = _maybe_forward(u.ups[6], h, emb) # final
     h

@@ -8,6 +8,8 @@ function train!(loss, model, data::DataLoader, opt_state, val_data;
     save_after_epoch::Bool=false,
     save_dir::String="",
     prob_uncond::Float64=0.0,
+    Nplots = 0,
+    plot_fn = (x) -> nothing
     )
     history = Dict(
         "epoch_size" => length(data),
@@ -26,7 +28,7 @@ function train!(loss, model, data::DataLoader, opt_state, val_data;
                     randomly_set_unconditioned(x[2]; prob_uncond=prob_uncond) 
                 x_splat = (x[1], y)
             else
-                x_splat = (x,)
+                x_splat = (x |> gpu,)
             end
             batch_loss, grads = Flux.withgradient(model) do m
                 loss(m, x_splat...)
@@ -41,6 +43,17 @@ function train!(loss, model, data::DataLoader, opt_state, val_data;
             path = joinpath(save_dir, "model_epoch=$(epoch).bson")
             let model = cpu(model) # keep main model on device
                 BSON.bson(path, Dict(:model => model))
+            end
+
+            if Nplots > 0
+                X0 = p_sample_loop(model, Nplots; to_device=gpu)
+                X0 = cpu(X0)
+                for i=1:Nplots
+                    dims = ndims(X0)
+                    colons = fill(Colon(), dims-1)
+                    p = plot_fn(X0[colons..., i])
+                    savefig(p, joinpath(save_dir, "sample_epoch$(epoch)_$(i).png"))
+                end
             end
         end
         push!(history["mean_batch_loss"], total_loss / length(data))
@@ -88,7 +101,7 @@ function batched_loss(loss, model, data::DataLoader; prob_uncond::Float64=0.0)
                 randomly_set_unconditioned(x[2]; prob_uncond=prob_uncond)  
             x_splat = (x[1], y)
         else
-            x_splat = (x,)
+            x_splat = (x |> gpu,)
         end
         total_loss += loss(model, x_splat...)
     end

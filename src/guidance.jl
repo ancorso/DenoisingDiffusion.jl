@@ -110,8 +110,8 @@ function p_sample_loop_all(
     x_all, x_start_all
 end
 
-function p_sample_loop_all(diffusion::GaussianDiffusion, batch_size::Int, label; options...)
-    labels = fill(label, batch_size)
+function p_sample_loop_all(diffusion::GaussianDiffusion, batch_size::Int, labels; options...)
+    # labels = fill(label, batch_size)
     shape = (diffusion.data_shape..., batch_size)
     p_sample_loop_all(diffusion, shape, labels; options...)
 end

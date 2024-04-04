@@ -112,7 +112,7 @@ function UNetConditioned(
                 num_blocks_per_level=num_blocks_per_level,
                 middle_attention=middle_attention,
             ),
-            cat_on_channel_dim
+            cat_on_channel_dim()
         ),
         NamedTuple(zip(up_keys, up_blocks))...,
         final=Conv((3, 3), model_channels => in_channels, stride=(1, 1), pad=(1, 1))

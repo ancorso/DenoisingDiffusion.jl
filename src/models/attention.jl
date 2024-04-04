@@ -19,28 +19,31 @@ The attention heads are split across channels `C` whereas in a text transformers
 The input here is `W × H × C × B` => `WH × C × B` compared to the usual `dm × N × B` input of a text transformer. 
 Here the second dimension is split: `C=nhead*dim_head` whereas in a text transformer, the first dimension is usually split `dm=nhead*dim_head`.
 """
-function MultiheadAttention(dim_model::Int, dim_head::Int; nhead::Int=4)
+function MultiheadAttention(dim_model::Int, dim_head::Int; nhead::Int=4, filter = (3,3), stride=(1,1), pad=(1,1))
     dim_hidden = dim_head * nhead
     MultiheadAttention(
         nhead,
-        Conv((3, 3), dim_model => dim_hidden * 3, stride=(1, 1), pad=(1, 1), bias=false),
-        Conv((3, 3), dim_hidden => dim_model, stride=(1, 1), pad=(1, 1))
+        Conv(filter, dim_model => dim_hidden * 3; stride, pad, bias=false),
+        Conv(filter, dim_hidden => dim_model; stride, pad)
     )
 end
 
-function MultiheadAttention(dim_model::Int; nhead::Int=4)
+function MultiheadAttention(dim_model::Int; nhead::Int=4, filter = (3,3), stride=(1,1), pad=(1,1))
     if dim_model % nhead != 0
         error("model dimension=$dim_model is not divisible by number of heads=$nhead")
     end
-    MultiheadAttention(dim_model, div(dim_model, nhead), nhead=nhead)
+    MultiheadAttention(dim_model, div(dim_model, nhead); nhead, filter, stride, pad)
 end
 
-function (mha::MultiheadAttention)(x::A) where {T,A<:AbstractArray{T,4}}
-    # batch multiplication version. Input is W × H × C × B
-    qkv = mha.to_qkv(x)
-    Q, K, V = Flux.chunk(qkv, 3, dims=3)
+function (mha::MultiheadAttention)(x::A) where {T,A<:AbstractArray{T}}
+    # batch multiplication version. Input is W × H × C × B or W × H × L × C × B
+    qkv = mha.to_qkv(x) # size(qkv) == (W, H, 3*dh*nhead, B)
 
-    c = size(Q, 3)
+    nspatialdims = ndims(x) - 2
+    channel_dim = nspatialdims + 1
+    Q, K, V = Flux.chunk(qkv, 3, dims=channel_dim) # size(Q) == (W, H, dh*nhead, B)
+
+    c = size(Q, channel_dim)
     dh = div(c, mha.nhead)
     #size(Q) == (W, H, dh*nhead, B) => (W*H, dh, nhead, B) => (dh, W*H, nhead, B)
     Q = permutedims(reshape(Q, :, dh, mha.nhead, size(x, 4)), [2, 1, 3, 4])
@@ -50,16 +53,9 @@ function (mha::MultiheadAttention)(x::A) where {T,A<:AbstractArray{T,4}}
     attn = scaled_dot_attention(Q, K, V)
     #size(attn) == (dh, W*H, nhead, B) => (W*H, dh, nhead, B) => (W, H, dh*nhead, B)
     attn = permutedims(attn, [2, 1, 3, 4])
-    attn = reshape(attn, size(x, 1), size(x, 2), c, size(x, 4))
+    attn = reshape(attn, size(x)[1:nspatialdims]..., c, size(x)[end]) 
 
     mha.to_out(attn)
-end
-
-function (mha::MultiheadAttention)(x::A) where {T,A<:AbstractArray{T,3}}
-    # single sample. Make it a batch of 1
-    x = reshape(x, size(x)..., 1)
-    attn = mha(x)
-    reshape(attn, size(attn)[1:end-1]...)
 end
 
 """

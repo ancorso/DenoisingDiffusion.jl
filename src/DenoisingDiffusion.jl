@@ -9,6 +9,7 @@ using Printf
 using BSON
 using Random
 import NNlib: batched_mul
+using Plots
 
 include("GaussianDiffusion.jl")
 include("guidance.jl")

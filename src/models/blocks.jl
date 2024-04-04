@@ -2,19 +2,21 @@ import Flux._big_show
 import Flux._show_children
 using Flux: _big_finale, _layer_show, _show_layers
 
-cat_on_channel_dim(h::AbstractArray, x::AbstractArray) = cat(x, h, dims=3)
+cat_on_channel_dim(channel_dim=3) = (h::AbstractArray, x::AbstractArray) -> begin
+    cat(x, h, dims=channel_dim)
+end
 
 ### upsampling and downsampling
 
-function upsample_layer(channels::Pair{<:Integer,<:Integer})
+function upsample_layer(channels::Pair{<:Integer,<:Integer}; scale=(2, 2), filter=(3,3), stride=(1,1), pad=(1,1))
     Chain(
-        Upsample(:nearest; scale=(2, 2)),
-        Conv((3, 3), channels, stride=(1, 1), pad=(1, 1))
+        Upsample(:nearest; scale),
+        Conv(filter, channels; stride, pad)
     )
 end
 
-function downsample_layer(channels::Pair{<:Integer,<:Integer})
-    Conv((4, 4), channels, stride=(2, 2), pad=(1, 1))
+function downsample_layer(channels::Pair{<:Integer,<:Integer}; filter=(4,4), stride=(2,2), pad=(1,1))
+    Conv(filter, channels; stride, pad)
 end
 
 """
@@ -33,13 +35,13 @@ end
 
 Flux.@functor ConvEmbed
 
-function ConvEmbed(channels::Pair{<:Integer,<:Integer}, emb_channels::Int; groups::Int=8, activation=swish)
+function ConvEmbed(channels::Pair{<:Integer,<:Integer}, emb_channels::Int; groups::Int=8, activation=swish, filter=(3,3), stride=(1,1), pad=(1,1))
     out = channels[2]
     embed_layers = Chain(
         swish,
         Dense(emb_channels, out),
     )
-    conv = Conv((3, 3), channels, stride=(1, 1), pad=(1, 1))
+    conv = Conv(filter, channels; stride, pad)
     norm = GroupNorm(out, groups)
     ConvEmbed(embed_layers, conv, norm, activation)
 end
@@ -91,18 +93,19 @@ end
 
 Flux.@functor ResBlock
 
-function ResBlock(channels::Pair{<:Integer,<:Integer}, emb_channels::Int; groups::Int=8, activation=swish)
+function ResBlock(channels::Pair{<:Integer,<:Integer}, emb_channels::Int; groups::Int=8, activation=swish, filter=(3,3), stride=(1,1), pad=(1,1))
     out_ch = channels[2]
-    conv_timestep = ConvEmbed(channels, emb_channels; groups=groups, activation=activation)
+    conv_timestep = ConvEmbed(channels, emb_channels; groups, activation, filter, stride, pad)
     out_layers = Chain(
-        Conv((3, 3), out_ch => out_ch, stride=(1, 1), pad=(1, 1)),
+        Conv(filter, out_ch => out_ch; stride, pad),
         GroupNorm(out_ch, groups),
         activation,
     )
     if channels[1] == channels[2]
         skip_transform = identity
     else
-        skip_transform = Conv((3, 3), channels, stride=(1, 1), pad=(1, 1))
+        skip_transform = Conv(filter, channels; stride, pad)
+        # skip_transform = Conv(filter, channels; stride, pad)
     end
     ResBlock(conv_timestep, out_layers, skip_transform)
 end

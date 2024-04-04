@@ -68,7 +68,14 @@ function UNet(
     block_groups::Int=8,
     num_attention_heads::Int=4,
     middle_attention::Bool=true,
+    ndims = 2
     ) where {N}
+    # Setup the dimension-flexible elements
+    filter3 = tuple([3 for i=1:ndims]...)
+    stride1 = tuple([1 for i=1:ndims]...)
+    pad1 = tuple([1 for i=1:ndims]...)
+    channel_dim = ndims + 1
+
     model_channels % block_groups == 0 ||
         error("The number of block_groups ($(block_groups)) must divide the number of model_channels ($model_channels)")
 
@@ -86,16 +93,16 @@ function UNet(
     down_keys = num_blocks_per_level == 1 ? [Symbol("down_1")] : [Symbol("down_1_$(i)") for i in 1:num_blocks_per_level]
     up_keys = num_blocks_per_level == 1 ? [Symbol("up_1")] : [Symbol("up_1_$(i)") for i in 1:num_blocks_per_level]
     down_blocks = [
-        block_layer(in_ch => in_ch, time_dim; groups=block_groups) for i in 1:num_blocks_per_level
+        block_layer(in_ch => in_ch, time_dim; groups=block_groups, filter=filter3, stride=stride1, pad=pad1) for i in 1:num_blocks_per_level
     ]
     up_blocks = [
-        block_layer((in_ch + out_ch) => out_ch, time_dim; groups=block_groups),
-        [block_layer(out_ch => out_ch, time_dim; groups=block_groups) for i in 2:num_blocks_per_level]...
+        block_layer((in_ch + out_ch) => out_ch, time_dim; groups=block_groups, filter=filter3, stride=stride1, pad=pad1),
+        [block_layer(out_ch => out_ch, time_dim; groups=block_groups, filter=filter3, stride=stride1, pad=pad1) for i in 2:num_blocks_per_level]...
     ]
     chain = ConditionalChain(;
-        init=Conv((3, 3), in_channels => model_channels, stride=(1, 1), pad=(1, 1)),
+        init=Conv(filter3, in_channels => model_channels; stride=stride1, pad=pad1),
         NamedTuple(zip(down_keys, down_blocks))...,
-        down_1=block_layer(in_ch => in_ch, time_dim; groups=block_groups),
+        down_1=block_layer(in_ch => in_ch, time_dim; groups=block_groups, filter=filter3, stride=stride1, pad=pad1),
         skip_1=ConditionalSkipConnection(
             _add_unet_level(in_out, time_dim, 2;
                 block_layer=block_layer,
@@ -103,11 +110,12 @@ function UNet(
                 num_attention_heads=num_attention_heads,
                 num_blocks_per_level=num_blocks_per_level,
                 middle_attention=middle_attention,
+                ndims=ndims
             ),
-            cat_on_channel_dim
+            cat_on_channel_dim(channel_dim)
         ),
         NamedTuple(zip(up_keys, up_blocks))...,
-        final=Conv((3, 3), model_channels => in_channels, stride=(1, 1), pad=(1, 1))
+        final=Conv(filter3, model_channels => in_channels; stride=stride1, pad=pad1)
     )
     UNet(time_embed, chain, length(channel_multipliers) + 1)
 end
@@ -121,19 +129,29 @@ function _add_unet_level(
     block_groups::Int, 
     num_attention_heads::Int,
     middle_attention::Bool=true,
+    ndims = 2
     )
+    # Setup the dimension-flexible elements
+    filter3 = tuple([3 for i=1:ndims]...)
+    filter4 = tuple([4 for i=1:ndims]...)
+    stride1 = tuple([1 for i=1:ndims]...)
+    pad1 = tuple([1 for i=1:ndims]...)
+    stride2 = tuple([2 for i=1:ndims]...)
+    scale2 = tuple([2 for i=1:ndims]...)
+    channel_dim = ndims + 1
+
     if level > length(in_out)
         in_ch, out_ch = in_out[end]
         keys_ = middle_attention ? 
             (Symbol("down_$level"), :middle_1, :middle_attention, :middle_2) : (Symbol("down_$level"), :middle)
         attention_layers = middle_attention ? 
             [
-                SkipConnection(MultiheadAttention(out_ch, nhead=num_attention_heads), +),
-                block_layer(out_ch => out_ch, emb_dim; groups=block_groups),
+                SkipConnection(MultiheadAttention(out_ch, nhead=num_attention_heads,  filter=filter3, stride=stride1, pad=pad1), +),
+                block_layer(out_ch => out_ch, emb_dim; groups=block_groups, filter=filter3, stride=stride1, pad=pad1),
             ] :  []
         layers = (
-            Conv((3, 3), in_ch => out_ch, stride=(1, 1), pad=(1, 1)),
-            block_layer(out_ch => out_ch, emb_dim; groups=block_groups),
+            Conv(filter3, in_ch => out_ch; stride=stride1, pad=pad1),
+            block_layer(out_ch => out_ch, emb_dim; groups=block_groups, filter=filter3, stride=stride1, pad=pad1),
             attention_layers...
         )
     else # recurse down a layer
@@ -149,14 +167,14 @@ function _add_unet_level(
             Symbol("upsample_$level")
         )
         down_blocks = [
-            block_layer(in_ch => in_ch, emb_dim; groups=block_groups) for i in 1:num_blocks_per_level
+            block_layer(in_ch => in_ch, emb_dim; groups=block_groups, filter=filter3, stride=stride1, pad=pad1) for i in 1:num_blocks_per_level
         ]
         up_blocks = [
-            block_layer((in_ch + out_ch) => out_ch, emb_dim; groups=block_groups),
-            [block_layer(out_ch => out_ch, emb_dim; groups=block_groups) for i in 2:num_blocks_per_level]...
+            block_layer((in_ch + out_ch) => out_ch, emb_dim; groups=block_groups, filter=filter3, stride=stride1, pad=pad1),
+            [block_layer(out_ch => out_ch, emb_dim; groups=block_groups, filter=filter3, stride=stride1, pad=pad1) for i in 2:num_blocks_per_level]...
         ]
         layers = (
-            downsample_layer(in_ch_prev => out_ch_prev),
+            downsample_layer(in_ch_prev => out_ch_prev; filter=filter4, stride=stride2, pad=pad1),
             down_blocks...,
             ConditionalSkipConnection(
                 _add_unet_level(in_out, emb_dim, level + 1;
@@ -165,11 +183,12 @@ function _add_unet_level(
                     num_attention_heads=num_attention_heads,
                     num_blocks_per_level=num_blocks_per_level,
                     middle_attention=middle_attention,
+                    ndims=ndims
                 ),
-                cat_on_channel_dim
+                cat_on_channel_dim(channel_dim)
             ),
             up_blocks...,
-            upsample_layer(out_ch => in_ch),
+            upsample_layer(out_ch => in_ch; scale=scale2, filter=filter3, stride=stride1, pad=pad1),
         )
     end
     ConditionalChain((; zip(keys_, layers)...))
@@ -177,7 +196,8 @@ end
 
 function (u::UNet)(x::AbstractArray, timesteps::AbstractVector{Int})
     downsize_factor = 2^(u.num_levels - 2)
-    if (size(x, 1) % downsize_factor != 0) || (size(x, 2) % downsize_factor != 0)
+
+    if (size(x, 1) % downsize_factor != 0) || (size(x, 2) % downsize_factor != 0) || (ndims(x) == 5 && (size(x, 3) % downsize_factor != 0))
         throw(DimensionMismatch(
             "image size $(size(x)[1:2]) is not divisible by $downsize_factor which is required for concatenation during upsampling.")
         )
