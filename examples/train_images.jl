@@ -17,15 +17,27 @@ include("load_images.jl")
 
 using Sleipner2019
 
+if length(ARGS) == 5
+    model_channels = parse(Int, ARGS[1])
+    num_timesteps = parse(Int, ARGS[2])
+    batch_size = parse(Int, ARGS[3])
+    learning_rate = parse(Float32, ARGS[4])
+    β2 = parse(Float32, ARGS[5])
+else
+    batch_size = 32
+    learning_rate = 0.0001
+    model_channels = 32
+    num_timesteps = 1000
+    β2 = 0.95
+end
+
 ### settings
-num_timesteps = 500
+
+
 seed = 2714
 dataset = :Sleipner # :Sleipner, :Layers  # :MNIST or :Pokemon or Minex or Layers
 data_directory = "../DGMExamples/data/"
 output_directory = joinpath("outputs", "$(dataset)_" * Dates.format(now(), "yyyymmdd_HHMM"))
-model_channels = 16
-learning_rate = 0.0005
-batch_size = 32
 num_epochs = 300
 loss_type = Flux.mse;
 to_device = gpu # cpu or gpu
@@ -60,13 +72,17 @@ elseif dataset == :Mern
     norm_data = normalize_neg_one_to_one(trainset)
     train_x, val_x = split_validation(MersenneTwister(seed), norm_data)
 elseif dataset == :Sleipner
-    filepath = "/scratch/acorso/sleipner_geology/X_32_59_132.h5"
+    filepath = "/home/acorso/sleipner_geology/X_32_59_132.h5"
     dataset_dims = size(h5open(filepath, "r")["X"])
     println(dataset_dims)
     Nsamples = dataset_dims[end]
     indices = randperm(MersenneTwister(seed), Nsamples)
     Ntrain = div(Nsamples, 10) * 9
     xt = [(x) -> x[:, :, ceil.(Int, range(1, stop=59, length=32)), :], (x) -> permutedims(x, (2, 3, 4, 1))]
+    μx = Float32[0.125, 6.73f-13]
+    σx = Float32[0.079, 1.60f-12]
+    pushfirst!(xt, (x) -> (x .- μx) ./ σx)
+
     trainindices, valindices = indices[1:Ntrain], indices[Ntrain+1:end]
     train_x, val_x = GeologyDataset(filepath, trainindices, transforms=xt), GeologyDataset(filepath, valindices, transforms=xt)
     dataset_dims = (size(train_x[1])..., dataset_dims[end])
@@ -75,7 +91,6 @@ else
 end
 
 
-dataset_dims
 ### model
 ## create
 if dataset !== :Sleipner
@@ -115,7 +130,7 @@ if dataset != :Sleipner
     train_data = Flux.DataLoader(train_x |> to_device; batchsize=batch_size, shuffle=true)
     val_data = Flux.DataLoader(val_x |> to_device; batchsize=batch_size, shuffle=false)
 else
-    train_data = DataLoader(train_x; collate=true, batchsize=batch_size)
+    train_data = DataLoader(train_x; collate=true, batchsize=batch_size, shuffle=true)
     val_data = DataLoader(val_x; collate=true, batchsize=batch_size)
 end
 
@@ -129,7 +144,8 @@ loss(diffusion, x::AbstractArray) = p_losses(diffusion, loss_type, x; to_device=
 #     println("done")
 # else
 println("defining new optimiser")
-opt = Adam(learning_rate)
+# opt = Adam(learning_rate)
+opt = Adam(learning_rate, (0.9, β2))
 println("  ", opt)
 opt_state = Flux.setup(opt, diffusion)
 # end
@@ -161,6 +177,7 @@ hyperparameters = Dict(
     "learning_rate" => learning_rate,
     "batch_size" => batch_size,
     "optimiser" => "$(typeof(opt).name.wrapper)",
+    "beta_2" => β2,
 )
 open(hyperparameters_path, "w") do f
     JSON.print(f, hyperparameters)
@@ -169,7 +186,7 @@ println("saved hyperparameters to $hyperparameters_path")
 
 println("Starting training")
 start_time = time_ns()
-history = train!(loss, diffusion, train_data, opt_state, val_data; num_epochs=num_epochs, save_after_epoch=true, save_dir=output_directory, Nplots=12, plot_fn=x -> plot_geology(permutedims(x, (4, 1, 2, 3))))
+history = train!(loss, diffusion, train_data, opt_state, val_data; num_epochs=num_epochs, save_after_epoch=true, save_dir=output_directory, Nplots=2, plot_fn=x -> plot_geology(permutedims(x, (4, 1, 2, 3))))
 end_time = time_ns() - start_time
 println("\ndone training")
 @printf "time taken: %.2fs\n" end_time / 1e9
@@ -228,17 +245,51 @@ println("press enter to finish")
 readline()
 
 
-model = BSON.load("outputs/Mern_20240301_1800/model_epoch=300.bson")[:model]
+
+## Load the model
+model = BSON.load("outputs/Sleipner_20240410_1610/model_epoch=151.bson")[:model]
 diffusion = model |> gpu
 
+# Time some inference
+ts = []
+Nsamples = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
+for i = Nsamples
+    t = @elapsed p_sample_loop(diffusion, i; to_device=to_device)
+    push!(ts, t)
+    println("t = $t")
+end
+# t = @elapsed p_sample_loop(diffusion, 1; to_device=to_device)
+
+using Plots
+using Plots; default(fontfamily="Computer Modern", framestyle=:box)
+
+plot(Nsamples[1:length(ts)], ts, xlabel="Number of Samples", ylabel="Time (s)", title="DDPM Inference Time (1000 denoising steps)", label="All samples", yscale=:log10, dpi=300, ylims=(1, 1e3), minorticks=true)
+plot!(Nsamples[1:length(ts)], ts ./ Nsamples[1:length(ts)], label="Per Sample")
+savefig("outputs/Sleipner_20240410_1610/inference_time.png")
+
 ## Generate some gifs:
-Xs, X0s = p_sample_loop_all(diffusion, 16; to_device=to_device)
+Xs, X0s = p_sample_loop_all(diffusion, 12; to_device=to_device)
+
+
+model = BSON.load("outputs/Sleipner_20240414_2119/model_epoch=18.bson")[:model]
+diffusion = model |> gpu
+x = p_sample_loop(diffusion, 32; to_device=gpu)
+plot_geology(permutedims(cpu(x[:,:,:,:,1]), (4, 1, 2, 3)))
+
+model.num_timesteps
+model.data_shape
 
 Nx = 40
 Ny = 40
 
 Xs = Xs |> cpu
 X0s = X0s |> cpu
+
+X0 = X0s[:, :, :, :, 1, 1:2:1000]
+
+BSON.@save "outputs/Sleipner_20240410_1610/Xs.bson" Xs
+BSON.@save "outputs/Sleipner_20240410_1610/X0.bson" X0
+
 function combine(imgs::AbstractArray, nrows::Int, ncols::Int, border::Int)
     canvas = zeros(Nx * nrows + (nrows + 1) * border, Ny * ncols + (ncols + 1) * border)
     for i in 1:nrows
